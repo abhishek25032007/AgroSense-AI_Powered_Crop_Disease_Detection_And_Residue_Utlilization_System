@@ -56,3 +56,56 @@ AI model analyzes the image
 Predictions are generated
 Crop residue intelligence is displayed
 
+🌱 Crop Residue Intelligence System
+
+One of the unique aspects of AgroSense is the integration of crop residue utilization recommendations.
+
+The system stores residue-related knowledge for different crops including:
+
+Crop residues
+Agricultural byproducts
+Sustainable reuse applications
+Example
+Apple
+
+Residues:
+
+Peels
+Pomace
+Seeds
+
+Utilization:
+
+Pectin extraction
+Animal feed
+Compost production
+
+🎨 Streamlit Web Application
+
+The frontend is built using Streamlit.
+
+UI Features
+Modern dark-themed interface
+Responsive design
+Animated cards and transitions
+Real-time image upload
+Interactive prediction results
+Custom UI Design
+
+The project includes:
+
+Advanced CSS styling
+Gradient effects
+Custom cards
+Animated sections
+Responsive layouts
+⚙️ Technologies Used
+Programming Language
+Python
+Libraries & Frameworks
+TensorFlow
+Keras
+Streamlit
+NumPy
+Pillow
+Pyngrok
