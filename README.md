@@ -109,3 +109,21 @@ Streamlit
 NumPy
 Pillow
 Pyngrok
+
+🎯 Project Objectives
+
+The main objectives of AgroSense are:
+
+Assist in smart agriculture practices
+Detect plant diseases efficiently
+Promote sustainable residue utilization
+Reduce agricultural waste
+Apply AI in real-world farming applications
+🌍 Future Improvements
+Support for additional crop categories
+Higher disease prediction accuracy
+Farmer-friendly multilingual interface
+Mobile application deployment
+Cloud deployment support
+IoT and Edge AI integration
+Real-time field analysis using cameras
