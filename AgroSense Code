@@ -1,0 +1,243 @@
+!pip install streamlit pyngrok pillow -q
+from google.colab import drive
+drive.mount('/content/drive')
+
+import os, numpy as np, tensorflow as tf
+import keras
+from keras import layers
+from keras.applications import MobileNetV2
+
+# ── Config ────────────────────────────────────────────────────
+DATASET_DIR  = "/content/drive/MyDrive/dataset"   # ← change if your path is different
+IMG_SIZE     = (224, 224)
+BATCH_SIZE   = 32
+EPOCHS_HEAD  = 3    # train only Dense layers (fast)
+EPOCHS_FINE  = 2     # optional: unfreeze top layers (better accuracy)
+MODEL_SAVE   = "crop_model_v2.keras"
+
+# ── Load dataset ──────────────────────────────────────────────
+train_ds = keras.utils.image_dataset_from_directory(
+    DATASET_DIR,
+    validation_split=0.2,
+    subset="training",
+    seed=42,
+    image_size=IMG_SIZE,
+    batch_size=BATCH_SIZE,
+)
+val_ds = keras.utils.image_dataset_from_directory(
+    DATASET_DIR,
+    validation_split=0.2,
+    subset="validation",
+    seed=42,
+    image_size=IMG_SIZE,
+    batch_size=BATCH_SIZE,
+)
+
+class_names = train_ds.class_names
+print("Classes found:", len(class_names))
+print(class_names)
+
+NUM_CLASSES = len(class_names)
+
+# ── Normalize & prefetch ──────────────────────────────────────
+normalization = layers.Rescaling(1 / 255)
+train_ds = train_ds.map(lambda x, y: (normalization(x), y)).prefetch(tf.data.AUTOTUNE)
+val_ds   = val_ds.map(lambda x, y:   (normalization(x), y)).prefetch(tf.data.AUTOTUNE)
+
+# ── Build model ───────────────────────────────────────────────
+base = MobileNetV2(input_shape=(224, 224, 3), include_top=False, weights="imagenet")
+base.trainable = False   # freeze — only train the head first
+
+inputs = keras.Input(shape=(224, 224, 3))
+x = base(inputs, training=False)
+x = layers.GlobalAveragePooling2D()(x)
+x = layers.Dense(128, activation="relu")(x)
+outputs = layers.Dense(NUM_CLASSES, activation="softmax")(x)
+
+model = keras.Model(inputs, outputs)
+model.summary()
+
+# ── Phase 1: Train head only ──────────────────────────────────
+model.compile(
+    optimizer=keras.optimizers.Adam(1e-3),
+    loss="sparse_categorical_crossentropy",
+    metrics=["accuracy"],
+)
+model.fit(train_ds, validation_data=val_ds, epochs=EPOCHS_HEAD)
+
+# ── Phase 2: Fine-tune top 30 base layers (optional) ─────────
+base.trainable = True
+for layer in base.layers[:-30]:
+    layer.trainable = False
+
+model.compile(
+    optimizer=keras.optimizers.Adam(1e-5),   # lower LR for fine-tuning
+    loss="sparse_categorical_crossentropy",
+    metrics=["accuracy"],
+)
+model.fit(train_ds, validation_data=val_ds, epochs=EPOCHS_FINE)
+
+# ── Save correctly ────────────────────────────────────────────
+model.save(MODEL_SAVE)
+print(f"\nModel saved to {MODEL_SAVE}")
+print(f"   Classes: {class_names}")
+print(f"   Accurcy on val set above ↑")
+
+# Save class names alongside model (IMPORTANT)
+import json
+with open("class_names.json", "w") as f:
+    json.dump(class_names, f)
+print("class_names.json saved")
+
+%%writefile app.py
+import streamlit as st
+import numpy as np
+import tempfile
+import os
+import json
+from PIL import Image
+import tensorflow as tf
+import keras
+
+def get_class_names():
+    json_path = "/content/class_names.json"
+    if os.path.exists(json_path):
+        with open(json_path) as f:
+            names = json.load(f)
+            st.toast(f"class_names.json loaded — {len(names)} classes", icon="✅")
+            return names
+    else:
+        st.error("class_names.json nahi mili /content/ mein!")
+        st.stop()
+
+CLASS_NAMES = get_class_names()
+
+CROP_DATA = {
+    "Apple": {
+        "residues": ["Peels", "Pomace", "Seeds"],
+        "uses":     ["Pectin extraction", "Animal feed", "Compost"],
+    },
+    "Corn_(maize)": {
+        "residues": ["Stalk", "Husk", "Cob"],
+        "uses":     ["Biofuel", "Paper", "Fodder"],
+    },
+    "Grape": {
+        "residues": ["Skins", "Seeds", "Stems"],
+        "uses":     ["Wine industry reuse", "Oil extraction", "Compost"],
+    },
+    "Potato": {
+        "residues": ["Peels", "Starch waste", "Leaves"],
+        "uses":     ["Animal feed", "Biofuel", "Compost"],
+    },
+    "Tomato": {
+        "residues": ["Peels", "Seeds", "Pulp"],
+        "uses":     ["Compost", "Lycopene extraction", "Animal feed"],
+    },
+}
+@st.cache_resource
+def load_crop_model():
+    model_path = "/content/crop_model_v2.keras"
+
+    if not os.path.exists(model_path):
+        st.error("crop_model_v2.keras nahi mili /content/ mein!")
+        st.info(" Agar session restart hua hai toh Drive se copy karo:\n"
+                "!cp /content/drive/MyDrive/crop_model_v2.keras /content/")
+        st.stop()
+
+    try:
+        model = keras.models.load_model(model_path, compile=False)
+        return model
+    except Exception as e:
+        st.error(f" Model load failed: {e}")
+        st.stop()
+
+# ── Step 4: Image predict karo ────────────────────────────────────────────────
+def predict_image(img_path, model):
+    img = keras.preprocessing.image.load_img(img_path, target_size=(224, 224))
+    arr = keras.preprocessing.image.img_to_array(img) / 255.0
+    arr = np.expand_dims(arr, axis=0)   # shape: (1, 224, 224, 3)
+
+    preds      = model.predict(arr, verbose=0)
+    idx        = int(np.argmax(preds[0]))
+    confidence = float(preds[0][idx]) * 100
+
+    label   = CLASS_NAMES[idx]
+    parts   = label.split("___")
+    crop    = parts[0]
+    disease = parts[1].replace("_", " ") if len(parts) > 1 else "Unknown"
+    return crop, disease, confidence
+
+st.set_page_config(page_title="AI Crop Residue System", layout="centered")
+
+st.title("AI Crop Residue Utilization System")
+st.caption(f"Model: crop_model_v2.keras  |  {len(CLASS_NAMES)} classes  |  TF {tf.__version__}  |  Keras {keras.__version__}")
+
+uploaded_file = st.fileuploader(" Crop ki leaf ki image upload karo", type=["jpg", "jpeg", "png"])
+
+if uploaded_file:
+    img = Image.open(uploaded_file).convert("RGB")
+    st.image(img, caption="Uploaded Image", use_container_width=True)
+
+    with st.spinner("Analyzing image..."):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+            img.save(tmp.name)
+            tmp_path = tmp.name
+
+        try:
+            model = load_crop_model()
+            crop, disease, confidence = predict_image(tmp_path, model)
+        except Exception as e:
+            st.error(f"Prediction failed: {e}")
+            st.stop()
+        finally:
+            os.unlink(tmp_path)
+
+    # Results
+    st.success(" Detection Complete!")
+    st.divider()
+
+    col1, col2 = st.columns(2)
+    col1.metric("Detected Crop",    crop.replace("_", " "))
+    col2.metric("Detected Disease", disease)
+    st.progress(int(confidence), text=f"Confidence: {confidence:.1f}%")
+
+    st.divider()
+
+    info = CROP_DATA.get(crop)
+    if info:
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.subheader(" Residues")
+            for r in info["residues"]:
+                st.write(f"• {r}")
+        with col_b:
+            st.subheader("Utilization Use")
+            for u in info["uses"]:
+                st.write(f"• {u}")
+    else:
+        st.warning(f"'{crop}' ka residue data nahi mila.")
+        st.info(f"Debug: Full label = {CLASS_NAMES[0]}")
+
+
+import subprocess, time
+from pyngrok import ngrok
+!pkill -f ngrok
+!pkill -f streamlit
+import time
+print("Done - ab agle cell chalao")
+ngrok.kill()
+subprocess.run(["pkill", "-f", "streamlit"], capture_output=True)
+time.sleep(2)
+
+ngrok.set_auth_token("31YVbfzhxR7eiEzxQTUmfXd3ZIg_7DfV2GAmYsgoEfVYpkoxG")
+
+proc = subprocess.Popen(
+    ["streamlit", "run", "app.py",
+     "--server.port", "8501",
+     "--server.headless", "true"],
+    stdout=subprocess.PIPE, stderr=subprocess.PIPE
+)
+time.sleep(5)
+
+public_url = ngrok.connect(8501)
+print("Open this link:", public_url)
